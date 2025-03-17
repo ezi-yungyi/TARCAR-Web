@@ -11,7 +11,8 @@ export default function Welcome() {
 
   const resizeTimeout = useRef<NodeJS.Timeout | null>(null);
 
-  const [parkingSpots, setParkingSpots] = useState<number[][][]>([]);
+  const [parkingSpots, setParkingSpots] = useState<{ id: number; position: number[][] }[]>([]);
+
   const [currentSpot, setCurrentSpot] = useState<number[][]>([]);
   const labels = ["BL", "BR", "FR", "FL"];
   const [isDragging, setIsDragging] = useState(false);
@@ -89,8 +90,6 @@ export default function Welcome() {
       };
     };
   }, []);
-
-
 
   const handleMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
@@ -195,14 +194,13 @@ export default function Welcome() {
           }
         }
       } else if (mode === "delete") {
-        setParkingSpots((prev) =>
-          prev.filter((spot) => {
-            const crossX = (spot[0][0] + spot[1][0] + spot[2][0] + spot[3][0]) / 4;
-            const crossY = (spot[0][1] + spot[1][1] + spot[2][1] + spot[3][1]) / 4;
-            const distance = Math.sqrt((crossX - mouseActualPosition.x) ** 2 + (crossY - mouseActualPosition.y) ** 2);
-            return distance > 15;
-          })
-        );
+        parkingSpots.forEach(spot => {
+          const crossX = (spot.position[0][0] + spot.position[1][0] + spot.position[2][0] + spot.position[3][0]) / 4;
+          const crossY = (spot.position[0][1] + spot.position[1][1] + spot.position[2][1] + spot.position[3][1]) / 4;
+          const distance = Math.sqrt((crossX - mouseActualPosition.x) ** 2 + (crossY - mouseActualPosition.y) ** 2);
+
+          if (distance < 15) {handleDeleteParkingSpot(spot.id)};
+        });
       }
     }
   };
@@ -248,7 +246,6 @@ export default function Welcome() {
     ctx.drawImage(image, 0, 0, image.width, image.height);
     ctx.setTransform(zoomScale, 0, 0, zoomScale, translate.x, translate.y);
 
-
     if (mousePosition) {
       ctx.fillStyle = "red";
       ctx.beginPath();
@@ -266,9 +263,9 @@ export default function Welcome() {
     // * exist
     parkingSpots.forEach((spot) => {
       ctx.beginPath();
-      ctx.moveTo(findX(spot[0][0]), findY(spot[0][1]));
-      for (let i = 1; i < spot.length; i++) {
-        ctx.lineTo(findX(spot[i][0]), findY(spot[i][1]));
+      ctx.moveTo(findX(spot.position[0][0]), findY(spot.position[0][1]));
+      for (let i = 1; i < spot.position.length; i++) {
+        ctx.lineTo(findX(spot.position[i][0]), findY(spot.position[i][1]));
       }
       ctx.closePath();
       ctx.strokeStyle = "green";
@@ -277,16 +274,16 @@ export default function Welcome() {
 
       if (mode !== "delete") {
         ctx.beginPath();
-        ctx.moveTo(findX(spot[0][0]), findY(spot[0][1]));
-        ctx.lineTo(findX(spot[2][0]), findY(spot[2][1]));
-        ctx.moveTo(findX(spot[1][0]), findY(spot[1][1]));
-        ctx.lineTo(findX(spot[3][0]), findY(spot[3][1]));
+        ctx.moveTo(findX(spot.position[0][0]), findY(spot.position[0][1]));
+        ctx.lineTo(findX(spot.position[2][0]), findY(spot.position[2][1]));
+        ctx.moveTo(findX(spot.position[1][0]), findY(spot.position[1][1]));
+        ctx.lineTo(findX(spot.position[3][0]), findY(spot.position[3][1]));
         ctx.strokeStyle = "green";
         ctx.lineWidth = 2;
         ctx.stroke();
       } else {
-        const centerX = (findX(spot[0][0]) + findX(spot[1][0]) + findX(spot[2][0]) + findX(spot[3][0])) / 4;
-        const centerY = (findY(spot[0][1]) + findY(spot[1][1]) + findY(spot[2][1]) + findY(spot[3][1])) / 4;
+        const centerX = (findX(spot.position[0][0]) + findX(spot.position[1][0]) + findX(spot.position[2][0]) + findX(spot.position[3][0])) / 4;
+        const centerY = (findY(spot.position[0][1]) + findY(spot.position[1][1]) + findY(spot.position[2][1]) + findY(spot.position[3][1])) / 4;
 
         ctx.beginPath();
         ctx.arc(centerX, centerY, 8, 0, Math.PI * 2);
@@ -353,11 +350,23 @@ export default function Welcome() {
     };
   }, [processImage]);
 
-  // ✅ **1. 获取停车位列表**
   const fetchParkingSpots = useCallback(async () => {
     try {
       const response = await axios.get("https://tarcar.multixers.cloud/parking-spots");
-      const spots = response.data.parkingSpots.map((spot: any) => JSON.parse(spot.position));
+
+      // 确保 `position` 是有效 JSON 并解析它
+      const spots = response.data.parkingSpots.map((spot: any) => {
+        try {
+          return {
+            id: spot.id, // 保留 ID
+            position: JSON.parse(spot.position) as number[][], // 解析 `position`
+          };
+        } catch (error) {
+          console.error(`Error parsing position for spot ID ${spot.id}:`, error);
+          return null; // 解析失败的返回 null
+        }
+      }).filter(Boolean); // 过滤掉 `null` 值
+
       setParkingSpots(spots);
     } catch (error) {
       console.error("Failed to fetch parking spots:", error);
@@ -373,7 +382,8 @@ export default function Welcome() {
           position: currentSpot,
           status: "available"
         });
-        setParkingSpots([...parkingSpots, JSON.parse(response.data.parkingSpot.position)]);
+        console.log(response.data.parkingSpot.id);
+        setParkingSpots([...parkingSpots, { id: response.data.parkingSpot.id, position: JSON.parse(response.data.parkingSpot.position) }]);
         setCurrentSpot([]);
       } catch (error) {
         console.error("Failed to create parking spot:", error);
@@ -384,17 +394,13 @@ export default function Welcome() {
   // ✅ **3. 删除停车位**
   const handleDeleteParkingSpot = async (spotIndex: number) => {
     try {
-      // 先获取 parkingSpot ID
-      const response = await axios.get("https://tarcar.multixers.cloud/parking-spots");
-      const spots = response.data.parkingSpots;
-      const spotId = spots[spotIndex]?.id;
+      console.log(spotIndex)
 
-      if (!spotId) return;
+      if (!spotIndex) return;
 
-      await axios.delete(`https://tarcar.multixers.cloud/parking-spots/${spotId}`);
+      await axios.delete(`https://tarcar.multixers.cloud/parking-spots/${spotIndex}`);
 
-      // 删除本地状态
-      setParkingSpots((prev) => prev.filter((_, index) => index !== spotIndex));
+      setParkingSpots((prev) => prev.filter((index) => index.id !== spotIndex));
     } catch (error) {
       console.error("Failed to delete parking spot:", error);
     }
@@ -404,7 +410,6 @@ export default function Welcome() {
   useEffect(() => {
     fetchParkingSpots();
   }, [fetchParkingSpots]);
-
 
   return (
     <div>
